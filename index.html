@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>发票合并开票凑单计算</title>
+<style>
+  :root { --bg:#0f1226; --panel:#1a1f3a; --panel2:#232a4d; --txt:#e8ecff; --muted:#9aa3c7; --accent:#7c9cff; --ok:#46d39a; --warn:#ffb84d; --danger:#ff6b81; }
+  * { box-sizing:border-box; }
+  body { margin:0; font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"PingFang SC","Microsoft YaHei",sans-serif; background:radial-gradient(1200px 600px at 80% -10%,#26305c00 0%, transparent 60%),var(--bg); color:var(--txt); }
+  .wrap { max-width:980px; margin:0 auto; padding:28px 20px 60px; }
+  h1 { font-size:22px; margin:0 0 4px; }
+  .sub { color:var(--muted); font-size:13px; margin-bottom:22px; }
+  .card { background:var(--panel); border:1px solid #2c3457; border-radius:14px; padding:18px; box-shadow:0 8px 30px rgba(0,0,0,.25); }
+  .row { display:flex; flex-wrap:wrap; gap:12px; align-items:flex-end; }
+  .field { display:flex; flex-direction:column; gap:6px; }
+  .field label { font-size:12px; color:var(--muted); }
+  textarea, input { background:var(--panel2); color:var(--txt); border:1px solid #3a4574; border-radius:10px; padding:10px 12px; font-size:14px; outline:none; }
+  textarea { width:560px; max-width:100%; min-height:70px; resize:vertical; font-family:ui-monospace,Menlo,Consolas,monospace; }
+  input[type=number] { width:120px; }
+  textarea:focus, input:focus { border-color:var(--accent); }
+  .btns { display:flex; gap:10px; }
+  button { cursor:pointer; border:none; border-radius:10px; padding:11px 18px; font-size:14px; font-weight:600; background:var(--accent); color:#0b0f24; transition:.15s; }
+  button:hover { filter:brightness(1.08); }
+  button.ghost { background:transparent; color:var(--accent); border:1px solid var(--accent); }
+  button.ghost:hover { background:#7c9cff22; }
+  .summary { margin:22px 0 14px; display:flex; gap:18px; flex-wrap:wrap; align-items:center; }
+  .pill { background:var(--panel2); border:1px solid #3a4574; border-radius:999px; padding:6px 14px; font-size:13px; }
+  .pill b { color:var(--accent); }
+  .grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(260px,1fr)); gap:14px; }
+  .inv { border-radius:14px; padding:14px; border:1px solid #ffffff14; position:relative; overflow:hidden; }
+  .inv .hd { display:flex; justify-content:space-between; align-items:center; margin-bottom:10px; }
+  .inv .idx { font-weight:700; font-size:14px; }
+  .inv .total { font-weight:800; font-size:16px; }
+  .chips { display:flex; flex-wrap:wrap; gap:7px; }
+  .chip { background:#ffffff1a; border-radius:8px; padding:5px 10px; font-size:13px; font-variant-numeric:tabular-nums; }
+  .bar { height:5px; border-radius:4px; background:#ffffff22; margin-top:12px; }
+  .bar > i { display:block; height:100%; border-radius:4px; background:#ffffffcc; }
+  .empty { color:var(--muted); padding:30px; text-align:center; }
+  .dropped { margin-top:20px; }
+  .dropped .title { color:var(--warn); font-size:13px; margin-bottom:8px; }
+  .err { color:var(--danger); font-size:13px; margin-top:12px; }
+  .foot { margin-top:26px; color:var(--muted); font-size:12px; line-height:1.7; }
+  code { background:#ffffff14; padding:1px 6px; border-radius:5px; font-size:12px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>发票合并开票凑单计算</h1>
+  <div class="sub">把订单组合成尽量多的发票，每张发票金额 ≥ 阈值，每个订单最多用一次。</div>
+
+  <div class="card">
+    <div class="row">
+      <div class="field" style="flex:1;min-width:260px">
+        <label for="orders">订单金额（支持 <code>[36.4, 29.7]</code> 或 <code>36.4,29.7</code> 或换行）</label>
+        <textarea id="orders" placeholder="36.40, 29.70, 39.58, 27.57, 23.40, 27.70, 27.39, 28.80, 39.50, 42.30, 23.80, 41.52, 91.50, 33.38, 37.80, 39.90, 7.58, 40.79"></textarea>
+      </div>
+      <div class="field">
+        <label for="threshold">单张发票最小金额</label>
+        <input id="threshold" type="number" value="100" min="0" step="0.01" />
+      </div>
+    </div>
+    <div class="btns" style="margin-top:14px">
+      <button id="run">计算</button>
+      <button class="ghost" id="sample">加载示例</button>
+      <button class="ghost" id="clear">清空</button>
+    </div>
+    <div class="err" id="err"></div>
+  </div>
+
+  <div class="summary" id="summary" style="display:none"></div>
+  <div class="grid" id="result"></div>
+  <div class="dropped" id="dropped" style="display:none"></div>
+
+  <div class="foot">
+    算法：订单数 ≤ 20 用状压 DP 求精确最优（只枚举「最小有效组」）；&gt; 20 用贪心近似。<br/>
+    凑不到阈值的订单会被丢弃；全部凑不到时返回空。内部按「分」做整数运算避免浮点误差。
+  </div>
+</div>
+
+<script>
+const SAMPLE = [36.40, 29.70, 39.58, 27.57, 23.40, 27.70, 27.39, 28.80,
+  39.50, 42.30, 23.80, 41.52, 91.50, 33.38, 37.80, 39.90, 7.58, 40.79];
+
+function parseOrders(text) {
+  let s = text.trim();
+  if (!s) return [];
+  if (s.startsWith('[')) {
+    s = s.replace(/^\[/, '').replace(/\]$/, '');
+  }
+  return s.split(/[,，\s]+/).map(x => x.trim()).filter(Boolean).map(Number).filter(x => !isNaN(x));
+}
+
+// 大订单做锚点 + 最小订单凑足（贪心近似），返回元
+function greedy(orders, threshold) {
+  const k = Math.round(threshold * 100);
+  const q = orders.map(x => Math.round(x * 100)).sort((a, b) => a - b);
+  const res = [];
+  while (q.length) {
+    const anchor = q.pop();
+    if (anchor >= k) { res.push([anchor]); continue; }
+    const group = [anchor]; let s = anchor;
+    while (q.length && s < k) { const x = q.shift(); group.push(x); s += x; }
+    if (s >= k) res.push(group); else break;
+  }
+  return res.map(g => g.map(c => c / 100));
+}
+
+// 状压 DP 精确最优，返回元
+function splitInvoices(orders, threshold) {
+  if (!orders.length) return [];
+  const k = Math.round(threshold * 100);
+  const cents = orders.map(x => Math.round(x * 100));
+  const solo = cents.filter(c => c >= k).map(c => [c]);
+  const rest = cents.filter(c => c < k);
+  let inv = solo.map(g => g.slice());
+  if (!rest.length) return inv.map(g => g.map(c => c / 100));
+  const n = rest.length;
+  if (n > 20) return greedy(orders, threshold);
+
+  const size = 1 << n;
+  const lowOf = new Int32Array(size), sums = new Int32Array(size), minel = new Int32Array(size);
+  function compute(prefix) {
+    for (let m = 1; m < size; m++) {
+      const lb = 31 - Math.clz32(m & -m);
+      lowOf[m] = lb;
+      const prev = m ^ (1 << lb);
+      sums[m] = sums[prev] + prefix[lb];
+      minel[m] = prev === 0 ? prefix[lb] : Math.min(minel[prev], prefix[lb]);
+    }
+  }
+  compute(rest);
+
+  const membership = new Array(n).fill(0);
+  let totalGroups = 0;
+  for (let m = 1; m < size; m++) {
+    if (sums[m] >= k && sums[m] - minel[m] < k) {
+      totalGroups++;
+      let mm = m;
+      while (mm) { membership[31 - Math.clz32(mm & -mm)]++; mm &= mm - 1; }
+    }
+  }
+  if (totalGroups > 200000) return greedy(orders, threshold);
+
+  const order = [...Array(n).keys()].sort((a, b) => membership[a] - membership[b]);
+  const rest2 = order.map(i => rest[i]);
+  compute(rest2);
+
+  const groupsByLowbit = Array.from({ length: n }, () => []);
+  for (let m = 1; m < size; m++) {
+    if (sums[m] >= k && sums[m] - minel[m] < k) groupsByLowbit[lowOf[m]].push(m);
+  }
+
+  const dp = new Int16Array(size);
+  const choice = new Int32Array(size); choice.fill(-1);
+  for (let m = 1; m < size; m++) {
+    const lb = lowOf[m];
+    let best = dp[m ^ (1 << lb)], bestG = -1;
+    const gs = groupsByLowbit[lb];
+    for (let i = 0; i < gs.length; i++) {
+      const g = gs[i];
+      if ((g & m) === g) {
+        const cand = 1 + dp[m ^ g];
+        if (cand > best) { best = cand; bestG = g; }
+      }
+    }
+    dp[m] = best; choice[m] = bestG;
+  }
+
+  const selected = [];
+  let m = size - 1;
+  while (m) {
+    const g = choice[m];
+    if (g < 0) m ^= 1 << lowOf[m];
+    else { selected.push(g); m ^= g; }
+  }
+  let used = 0;
+  for (const g of selected) {
+    used |= g;
+    inv.push(rest2.filter((_, i) => (g >> i) & 1));
+  }
+  if (!inv.length) return [];
+  return inv.map(g => g.map(c => c / 100));
+}
+
+function fmt(v) { return v.toFixed(2); }
+
+function render() {
+  const errEl = document.getElementById('err');
+  const sumEl = document.getElementById('summary');
+  const resEl = document.getElementById('result');
+  const dropEl = document.getElementById('dropped');
+  errEl.textContent = ''; sumEl.style.display = 'none'; resEl.innerHTML = '';
+  dropEl.style.display = 'none';
+
+  const threshold = parseFloat(document.getElementById('threshold').value);
+  const orders = parseOrders(document.getElementById('orders').value);
+  if (!orders.length) { errEl.textContent = '请输入订单金额。'; return; }
+  if (isNaN(threshold) || threshold <= 0) { errEl.textContent = '请输入有效的阈值。'; return; }
+
+  const invoices = splitInvoices(orders, threshold);
+  const usedCount = invoices.reduce((a, g) => a + g.length, 0);
+  const totalSum = orders.reduce((a, b) => a + b, 0);
+  const invoicedSum = invoices.reduce((a, g) => a + g.reduce((x, y) => x + y, 0), 0);
+
+  sumEl.style.display = 'flex';
+  sumEl.innerHTML =
+    `<div class="pill">发票数 <b>${invoices.length}</b></div>` +
+    `<div class="pill">使用订单 <b>${usedCount}</b> / ${orders.length}</div>` +
+    `<div class="pill">开票金额 <b>${fmt(invoicedSum)}</b> / 总额 ${fmt(totalSum)}</div>` +
+    `<div class="pill">阈值 <b>${fmt(threshold)}</b></div>`;
+
+  if (!invoices.length) {
+    resEl.innerHTML = `<div class="empty">没有任何订单能凑到 ${fmt(threshold)} 元，返回空。</div>`;
+    return;
+  }
+
+  invoices.forEach((g, idx) => {
+    const total = g.reduce((a, b) => a + b, 0);
+    const hue = (idx * 137) % 360;
+    const div = document.createElement('div');
+    div.className = 'inv';
+    div.style.background = `linear-gradient(135deg, hsl(${hue} 60% 32%) 0%, hsl(${hue} 55% 18%) 100%)`;
+    div.innerHTML =
+      `<div class="hd"><span class="idx">发票 ${idx + 1}</span><span class="total">¥${fmt(total)}</span></div>` +
+      `<div class="chips">${g.map(v => `<span class="chip">¥${fmt(v)}</span>`).join('')}</div>` +
+      `<div class="bar"><i style="width:${Math.min(100, total / threshold * 100)}%"></i></div>`;
+    resEl.appendChild(div);
+  });
+
+  const usedSet = new Set();
+  invoices.forEach(g => g.forEach(() => {}));
+  // 计算被丢弃的订单（按值-数量匹配，避免浮点/重复问题用索引不易，这里用计数法）
+  const remaining = orders.slice();
+  // 用发票里的订单逐个从 remaining 里扣掉（按值扣一个）
+  const dropped = [];
+  for (const g of invoices) {
+    for (const v of g) {
+      const pos = remaining.indexOf(v);
+      if (pos >= 0) remaining.splice(pos, 1);
+    }
+  }
+  dropped.push(...remaining);
+  if (dropped.length) {
+    dropEl.style.display = 'block';
+    dropEl.innerHTML =
+      `<div class="title">未达阈值被丢弃的订单（${dropped.length} 单，共 ¥${fmt(dropped.reduce((a, b) => a + b, 0))}）</div>` +
+      `<div class="chips">${dropped.map(v => `<span class="chip" style="background:#ffb84d33">¥${fmt(v)}</span>`).join('')}</div>`;
+  }
+}
+
+document.getElementById('run').addEventListener('click', render);
+document.getElementById('sample').addEventListener('click', () => {
+  document.getElementById('orders').value = SAMPLE.join(', ');
+  document.getElementById('threshold').value = 100;
+  render();
+});
+document.getElementById('clear').addEventListener('click', () => {
+  document.getElementById('orders').value = '';
+  document.getElementById('err').textContent = '';
+  document.getElementById('summary').style.display = 'none';
+  document.getElementById('result').innerHTML = '';
+  document.getElementById('dropped').style.display = 'none';
+});
+document.getElementById('orders').addEventListener('keydown', e => { if (e.ctrlKey && e.key === 'Enter') render(); });
+window.addEventListener('DOMContentLoaded', () => { document.getElementById('sample').click(); });
+</script>
+</body>
+</html>
