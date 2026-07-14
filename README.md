@@ -1,4 +1,4 @@
-# 发票有奖合并开票最优计算脚本
+# 发票有奖合并开票凑单脚本
 
 > [![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue.svg)](https://github.com/BreadKid/invoice-merge-solver/blob/main/LICENSE)
 
