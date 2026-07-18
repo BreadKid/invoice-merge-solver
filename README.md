@@ -7,7 +7,8 @@
 国内的伙伴们，有奖发票抽了好多次了，最近发现有些平台可以小额订单合并开票，写了个凑单的计算工具。
 
 ## 用法
-### 可视化
+### 可视化 
+[https://www.breadykid.com/invoice-merge-solver/](https://www.breadykid.com/invoice-merge-solver/)  
 [![页面预览](page_view.png)](https://breadkid.github.io/invoice-merge-solver/)
 ### 命令行
 
